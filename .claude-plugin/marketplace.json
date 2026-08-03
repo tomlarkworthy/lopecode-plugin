@@ -1,0 +1,38 @@
+{
+  "name": "lopecode-plugins",
+  "owner": {
+    "name": "Tom Larkworthy",
+    "email": "tomlarkworthy@gmail.com"
+  },
+  "metadata": {
+    "description": "Lopecode notebook tools for Claude Code",
+    "version": "0.4.0"
+  },
+  "plugins": [
+    {
+      "name": "lopecode-channel",
+      "source": ".",
+      "version": "0.4.0",
+      "description": "Pair program with Claude inside Lopecode notebooks. Chat, watch variables, define cells, run tests — all from the browser.",
+      "author": {
+        "name": "Tom Larkworthy"
+      },
+      "repository": "https://github.com/tomlarkworthy/lopecode-plugin",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "claude",
+        "lopecode",
+        "notebook",
+        "pair-programming",
+        "observable"
+      ],
+      "category": "development",
+      "tags": [
+        "notebook",
+        "mcp",
+        "pair-programming"
+      ]
+    }
+  ]
+}
