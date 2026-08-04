@@ -1,0 +1,9 @@
+node_modules/
+package-lock.json
+
+# Runtime artifact of a live server, not a build output.
+.lopecode-port
+dist/.lopecode-port
+
+# dist/ is deliberately committed: `/plugin install` clones this repo and runs
+# dist/lopecode-channel.mjs directly, with no build step on the user's machine.

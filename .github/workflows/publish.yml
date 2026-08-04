@@ -1,0 +1,99 @@
+name: Publish
+
+# One tag releases both distribution paths:
+#   npm @lopecode/channel   -> `claude mcp add lopecode -- npx -y @lopecode/channel`
+#   this repo's main        -> `/plugin install lopecode-channel@lopecode-plugins`
+#
+# Marketplace users install from main's HEAD, so the tag is also what makes a build live
+# to them: the refreshed dist/ is committed back to main as part of the release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # to commit the refreshed dist/ back to main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main          # tags are detached; we need a branch to commit dist/ onto
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm install --no-audit --no-fund --omit=optional
+
+      # The tag names the release; package.json is what actually gets published.
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "tag $GITHUB_REF_NAME implies $TAG but package.json is $PKG"
+            exit 1
+          fi
+
+      - name: Resolve version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      # plugin.json and marketplace.json carry the version users see in the plugin manager.
+      - name: Check the manifests match package.json
+        run: |
+          set -euo pipefail
+          P=$(node -p "require('./.claude-plugin/plugin.json').version")
+          M=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
+          if [ "$P" != "$version" ] || [ "$M" != "$version" ]; then
+            echo "version drift: package.json=$version plugin.json=$P marketplace.json=$M"
+            exit 1
+          fi
+
+      - run: bun run build.ts
+      - run: bun test ./tests/lopecode-channel.test.ts
+
+      # Never ship a bundle that has not completed a handshake.
+      - name: Verify both entry points
+        run: |
+          node verify-node-build.mjs
+          node verify-node-build.mjs bun src/lopecode-channel.ts
+
+      - name: Validate the plugin manifest
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate .
+
+      - name: Publish to npm if the version is new
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if npm view "@lopecode/channel@${version}" version >/dev/null 2>&1; then
+            echo "@lopecode/channel@${version} already published — skipping"
+          else
+            npm publish --access public
+          fi
+
+      - name: Commit the refreshed dist/ to main
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- dist/)" ]; then
+            echo "dist/ already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/
+          git commit -m "build: dist/ for ${version}"
+          git push origin main
