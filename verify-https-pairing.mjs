@@ -61,7 +61,11 @@ try {
   // headless denies the prompt silently (ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS). Grant it
   // up front — that is the state a user reaches by clicking Allow. Browser.grantPermissions
   // without a browserContextId targets the default context, so the pages must live there.
-  browser = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "lope-e2e-")), { headless: true });
+  // LOPE_E2E_HEADED=1 reproduces what a real user sees (headless auto-denies the prompt);
+  // LOPE_E2E_DISABLE_LNA=1 turns the gate off entirely, which is how CI stays deterministic.
+  const args = process.env.LOPE_E2E_DISABLE_LNA === "1" ? ["--disable-features=LocalNetworkAccessChecksWebSockets"] : [];
+  browser = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "lope-e2e-")),
+    { headless: process.env.LOPE_E2E_HEADED !== "1", args });
   const page = await browser.newPage();
   const cdp = await browser.newCDPSession(page);
   await cdp.send("Browser.grantPermissions", { origin: new URL(notebook).origin, permissions: ["localNetworkAccess"] });
