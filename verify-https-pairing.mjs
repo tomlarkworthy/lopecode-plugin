@@ -43,7 +43,7 @@ const until = async (pred, ms, what) => {
   }
 };
 
-let browser;
+let browser, probePage, pageLog = [];
 try {
   // MCP handshake so the server finishes booting.
   proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "verify", version: "0" } } }) + "\n");
@@ -56,6 +56,10 @@ try {
   const { chromium } = await import("playwright");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.on("console", (m) => pageLog.push(`[${m.type()}] ${m.text()}`));
+  page.on("pageerror", (e) => pageLog.push(`[pageerror] ${e.message}`));
+  page.on("requestfailed", (r) => pageLog.push(`[reqfail] ${r.failure()?.errorText} ${r.url().slice(0, 120)}`));
+  probePage = page;
   const url = `${notebook}${LAYOUT}&cc=${token}`;
   console.log(`opening ${url.slice(0, 96)}…`);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -73,6 +77,26 @@ try {
   console.log("\nPASS — https-origin notebook paired to a local npx-installed channel");
 } catch (e) {
   console.error("FAIL:", e.message);
+  if (probePage) {
+    // Did the page even get far enough to try, and can it reach loopback at all?
+    const state = await probePage.evaluate(() => ({
+      hash: location.hash.slice(0, 120),
+      runtime: !!window.__ojs_runtime,
+      lopecode: !!window.lopecode,
+      mains: window.__ojs_runtime ? [...window.__ojs_runtime._modules?.keys?.() ?? []].slice(0, 12) : null,
+      body: document.body.innerText.slice(0, 400),
+    })).catch((err) => ({ error: err.message }));
+    console.error("page state:", JSON.stringify(state, null, 2));
+    const ws = await probePage.evaluate((p) => new Promise((res) => {
+      const s = new WebSocket(`ws://127.0.0.1:${p}/ws`);
+      const done = (r) => { res(r); try { s.close(); } catch {} };
+      s.onopen = () => done("open");
+      s.onerror = () => done("error");
+      setTimeout(() => done("timeout"), 5000);
+    }), port).catch((err) => "probe failed: " + err.message);
+    console.error("loopback ws from the page:", ws);
+  }
+  console.error("page log (last 60):\n" + pageLog.slice(-60).join("\n"));
   console.error("server stderr:\n" + stderr);
   process.exitCode = 1;
 } finally {
