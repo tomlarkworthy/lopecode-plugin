@@ -2,6 +2,9 @@
 // The user story: a notebook served from a domain the user does not own pairs with a
 // channel server installed locally via `npx` (no Bun, no plugin, no relay).
 import { spawn } from "child_process";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 const ENTRY = process.argv[2] ?? "dist/lopecode-channel.mjs";
 const BASE = "https://tomlarkworthy.github.io/lopecode/notebooks/";
@@ -54,8 +57,15 @@ try {
   console.log(`serving: ${notebook}`);
 
   const { chromium } = await import("playwright");
-  browser = await chromium.launch({ headless: true });
+  // Chrome 151 gates loopback WebSockets behind the Local Network Access permission, and
+  // headless denies the prompt silently (ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS). Grant it
+  // up front — that is the state a user reaches by clicking Allow. Browser.grantPermissions
+  // without a browserContextId targets the default context, so the pages must live there.
+  browser = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "lope-e2e-")), { headless: true });
   const page = await browser.newPage();
+  const cdp = await browser.newCDPSession(page);
+  await cdp.send("Browser.grantPermissions", { origin: new URL(notebook).origin, permissions: ["localNetworkAccess"] });
+  console.log("granted localNetworkAccess to", new URL(notebook).origin);
   page.on("console", (m) => pageLog.push(`[${m.type()}] ${m.text()}`));
   page.on("pageerror", (e) => pageLog.push(`[pageerror] ${e.message}`));
   page.on("requestfailed", (r) => pageLog.push(`[reqfail] ${r.failure()?.errorText} ${r.url().slice(0, 120)}`));
