@@ -13,9 +13,15 @@ That's it — Node 20+, nothing installed globally, no plugin. Then ask Claude: 
 Claude gets a pairing token, opens the notebook in your browser, and auto-connects.
 
 The notebook does not have to be a local file: a notebook served from any origin (e.g.
-`https://tomlarkworthy.github.io/lopecode/notebooks/…`) can pair with your local channel,
-because browsers permit `ws://127.0.0.1` from an https page. Paste the pairing token into
-the `@tomlarkworthy/claude-code-pairing` panel, or let Claude open the URL with `&cc=TOKEN`.
+`https://tomlarkworthy.github.io/lopecode/notebooks/…`) can pair with your local channel over
+`ws://127.0.0.1`. Paste the pairing token into the `@tomlarkworthy/claude-code-pairing` panel,
+or let Claude open the URL with `&cc=TOKEN`.
+
+Chrome 151 gates that connection behind the Local Network Access permission
+(`LocalNetworkAccessChecksWebSockets`); a blocked one fails with
+`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS` in the console — allow local network access for
+the site when prompted. Headless Chrome refuses it outright, so `verify-https-pairing.mjs`
+turns the gate off (`LOPE_E2E_DISABLE_LNA=1`) and keeps a gated run as an informational probe.
 
 ### Inbound push (optional)
 
