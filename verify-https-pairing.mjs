@@ -4,8 +4,22 @@
 import { spawn } from "child_process";
 
 const ENTRY = process.argv[2] ?? "dist/lopecode-channel.mjs";
-const NOTEBOOK = "https://tomlarkworthy.github.io/lopecode/notebooks/quick_start.html";
+const BASE = "https://tomlarkworthy.github.io/lopecode/notebooks/";
+// Both names host the same two modules; the rename ships whenever the content repo is pushed,
+// so resolve rather than pin — a 404 here must fail loudly, not as a pairing timeout.
+const CANDIDATES = ["quick_start.html", "@tomlarkworthy_blank-notebook.html"];
 const LAYOUT = "#view=R100(S60(@tomlarkworthy/blank-notebook),S40(@tomlarkworthy/claude-code-pairing))";
+
+const resolveNotebook = async () => {
+  const tried = [];
+  for (const name of CANDIDATES) {
+    const url = BASE + name;
+    const status = await fetch(url, { method: "HEAD" }).then((r) => r.status).catch((e) => e.message);
+    if (status === 200) return url;
+    tried.push(`${name} → ${status}`);
+  }
+  throw new Error(`no notebook served: ${tried.join(", ")}`);
+};
 
 const proc = ENTRY.endsWith(".mjs")
   ? spawn("node", [ENTRY], { cwd: import.meta.dirname, stdio: ["pipe", "pipe", "pipe"] })
@@ -36,10 +50,13 @@ try {
   await until(() => token && port, 20000, "token+port");
   console.log(`channel server up on ${port}, token ${token}`);
 
+  const notebook = await resolveNotebook();
+  console.log(`serving: ${notebook}`);
+
   const { chromium } = await import("playwright");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  const url = `${NOTEBOOK}${LAYOUT}&cc=${token}`;
+  const url = `${notebook}${LAYOUT}&cc=${token}`;
   console.log(`opening ${url.slice(0, 96)}…`);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
