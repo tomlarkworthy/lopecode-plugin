@@ -68,8 +68,9 @@ try {
     { headless: process.env.LOPE_E2E_HEADED !== "1", args });
   const page = await browser.newPage();
   const cdp = await browser.newCDPSession(page);
-  await cdp.send("Browser.grantPermissions", { origin: new URL(notebook).origin, permissions: ["localNetworkAccess"] });
-  console.log("granted localNetworkAccess to", new URL(notebook).origin);
+  const origin = new URL(notebook).origin;
+  await cdp.send("Browser.setPermission", { permission: { name: "local-network-access" }, setting: "granted", origin });
+  console.log("granted local-network-access to", origin);
   page.on("console", (m) => pageLog.push(`[${m.type()}] ${m.text()}`));
   page.on("pageerror", (e) => pageLog.push(`[pageerror] ${e.message}`));
   page.on("requestfailed", (r) => pageLog.push(`[reqfail] ${r.failure()?.errorText} ${r.url().slice(0, 120)}`));
@@ -84,8 +85,7 @@ try {
   }, 90000, "notebook to pair");
 
   console.log("PAIRED from an https origin:", JSON.stringify(health));
-  const origin = await page.evaluate(() => location.origin);
-  console.log("notebook origin:", origin);
+  console.log("notebook origin:", await page.evaluate(() => location.origin));
   const status = await page.evaluate(() => window.__ojs_runtime ? "runtime up" : "no runtime");
   console.log("page:", status);
   console.log("\nPASS — https-origin notebook paired to a local npx-installed channel");

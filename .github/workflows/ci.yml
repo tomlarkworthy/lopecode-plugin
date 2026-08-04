@@ -76,11 +76,9 @@ jobs:
       # Chrome 151 gates loopback WebSockets on the Local Network Access permission. Headless
       # denies the prompt, so the gate is turned off for the deterministic run; the headed run
       # under xvfb records what a real user hits and is informational only.
-      - name: Probe — headed browser, LNA permission granted (informational)
+      - name: Probe — LNA gate on, permission granted (informational)
         continue-on-error: true
-        env:
-          LOPE_E2E_HEADED: '1'
-        run: xvfb-run -a node verify-https-pairing.mjs
+        run: node verify-https-pairing.mjs
 
       - name: Verify https pairing
         env:
