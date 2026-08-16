@@ -29,7 +29,12 @@ jobs:
         run: |
           if ! git diff --quiet -- dist/; then
             echo "dist/ differs from a fresh build of src/ — run 'bun run build.ts' and commit"
-            git diff --stat -- dist/
+            # The actual differing lines, not just a stat: when the mismatch is a toolchain
+            # difference rather than a stale commit, the stat alone says nothing.
+            git diff --unified=0 -- dist/ | head -60
+            echo "--- builder versions ---"
+            bun --version
+            node -p "require('./node_modules/esbuild/package.json').version"
             exit 1
           fi
 
