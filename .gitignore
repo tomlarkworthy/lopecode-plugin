@@ -1,5 +1,8 @@
 node_modules/
-package-lock.json
+
+# package-lock.json IS committed: dist/ is a committed bundle of these dependencies and
+# CI checks it against a fresh build, so the resolution that produced it has to be pinned.
+# Ignoring the lock let every environment resolve its own ws and build a different dist/.
 
 # Runtime artifact of a live server, not a build output.
 .lopecode-port
