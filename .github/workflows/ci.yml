@@ -16,9 +16,15 @@ jobs:
         with:
           node-version: '20'   # the floor declared in package.json engines
 
-      # playwright is a devDependency (qa_* tools and the e2e job load it lazily); its
-      # postinstall would pull ~150MB of browsers this job never launches.
-      - run: npm install --no-audit --no-fund
+      # npm ci, not npm install: dist/ is committed and checked against a fresh build below,
+      # so the bundle has to be reproducible. `npm install` re-resolves anything the lockfile
+      # pins outside its package.json range and silently bundles a different dependency —
+      # a lock pinning ws 8.19.0 under a ^8.21.1 range built a dist/ that no CI run could
+      # reproduce. npm ci fails on that inconsistency instead of papering over it.
+      #
+      # playwright is a devDependency the qa_* tools load lazily; its postinstall would pull
+      # ~150MB of browsers this job never launches.
+      - run: npm ci --no-audit --no-fund
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
@@ -78,7 +84,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: bun run build.ts
 

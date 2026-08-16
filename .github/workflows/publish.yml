@@ -32,7 +32,8 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install --no-audit --no-fund
+      # npm ci so the published bundle is the one CI verified — see the note in ci.yml.
+      - run: npm ci --no-audit --no-fund
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'   # devDep; this job never launches a browser
 
