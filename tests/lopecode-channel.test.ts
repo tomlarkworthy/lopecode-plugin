@@ -307,6 +307,95 @@ describe("lopecode-channel server", () => {
 });
 
 /**
+ * Inbound push is allowlist-gated in Claude Code and the server cannot see that decision —
+ * initialize capabilities and CLAUDE_* env are identical with and without --channels. So the
+ * channel watches for a symptom instead: a forwarded message that nothing answers.
+ */
+describe("inbound push liveness", () => {
+  it("warns into the notebook chat when a forwarded message goes unanswered", async () => {
+    const proc = spawn(["bun", "run", CHANNEL_SCRIPT], {
+      // Short timeout so the test does not wait the production 40s.
+      env: { ...process.env as any, LOPECODE_PORT: "0", LOPECODE_PUSH_SILENCE_MS: "300" },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (!/WebSocket server on/.test(buf)) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value);
+      }
+      reader.releaseLock();
+      const port = Number(buf.match(/WebSocket server on ws:\/\/127\.0\.0\.1:(\d+)/)![1]);
+      const tok = buf.match(/pairing token: (LOPE-\d+-\w+)/)![1];
+
+      const ws = await connectWs(port);
+      await sendAndReceive(ws, { type: "pair", token: tok, url: "http://test/push", title: "Push" });
+
+      const warning = new Promise<any>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no warning arrived")), 5000);
+        ws.addEventListener("message", (e: MessageEvent) => {
+          const m = JSON.parse(e.data);
+          if (m.type === "reply") { clearTimeout(timer); resolve(m); }
+        });
+      });
+      ws.send(JSON.stringify({ type: "message", content: "anyone there?" }));
+
+      const m = await warning;
+      expect(m.markdown).toContain("did not reach Claude");
+      expect(m.markdown).toContain("--dangerously-load-development-channels server:lopecode");
+      ws.close();
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it("stays quiet when Claude is demonstrably active", async () => {
+    const proc = spawn(["bun", "run", CHANNEL_SCRIPT], {
+      env: { ...process.env as any, LOPECODE_PORT: "0", LOPECODE_PUSH_SILENCE_MS: "300" },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (!/WebSocket server on/.test(buf)) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value);
+      }
+      reader.releaseLock();
+      const port = Number(buf.match(/WebSocket server on ws:\/\/127\.0\.0\.1:(\d+)/)![1]);
+      const tok = buf.match(/pairing token: (LOPE-\d+-\w+)/)![1];
+
+      const ws = await connectWs(port);
+      await sendAndReceive(ws, { type: "pair", token: tok, url: "http://test/push-ok", title: "PushOK" });
+
+      let warned = false;
+      ws.addEventListener("message", (e: MessageEvent) => {
+        if (JSON.parse(e.data).type === "reply") warned = true;
+      });
+      ws.send(JSON.stringify({ type: "message", content: "anyone there?" }));
+
+      // A PostToolUse hook POST is proof Claude is working, so the probe must stand down.
+      await fetch(`http://127.0.0.1:${port}/tool-activity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/x" } }),
+      });
+
+      await new Promise((r) => setTimeout(r, 1200));   // 4x the silence window
+      expect(warned).toBe(false);
+      ws.close();
+    } finally {
+      proc.kill();
+    }
+  });
+});
+
+/**
  * The activity feed tails this session's transcript. It used to find it by scanning
  * ~/.claude/projects for the newest .jsonl, which tails whichever project was touched
  * most recently — someone else's session — whenever the channel runs outside a project

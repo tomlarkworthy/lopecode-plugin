@@ -1113,6 +1113,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+  notePushDelivered();
   try {
     // get_pairing_token needs no notebook connection
     if (req.params.name === "get_pairing_token") {
@@ -1799,6 +1800,7 @@ function handleWsMessage(ws: ServerWebSocket, raw: string | Buffer) {
           },
         });
       }
+      armPushProbe(notebookUrl);
       break;
     }
 
@@ -1903,6 +1905,64 @@ function handleWsClose(ws: ServerWebSocket) {
 // --- Session log tailing ---
 
 /** Broadcast an activity event to all paired notebooks */
+/**
+ * Whether notebook → Claude push is actually reaching Claude.
+ *
+ * This cannot be detected, only observed. Inbound push is gated by Claude Code's channel
+ * allowlist, and nothing the server can see reflects that decision: the initialize
+ * capabilities, our environment, and CLAUDE_* variables are byte-identical with and without
+ * --channels, and reading the parent's argv is out (ps is blocked by the sandbox the channel
+ * runs under). Notifications are also fire-and-forget, so an ignored one looks like a
+ * delivered one.
+ *
+ * So we do not report a capability, we report a symptom: after forwarding a message we watch
+ * for Claude doing anything at all. Silence past the timeout means the message went nowhere,
+ * which is the thing the user actually needs to be told — the chat box looks functional and
+ * silently discards what they type.
+ */
+type PushStatus = "unknown" | "working" | "silent";
+let pushStatus: PushStatus = "unknown";
+let pushProbe: ReturnType<typeof setTimeout> | null = null;
+// Generous: a long Bash or Agent call can precede Claude's first reply, and a false
+// "push is broken" is worse than a late one. Overridable so tests need not wait it out.
+const PUSH_SILENCE_MS = Number(process.env.LOPECODE_PUSH_SILENCE_MS) || 40000;
+
+/** Any activity from Claude proves the channel is live. */
+function notePushDelivered() {
+  if (pushProbe) { clearTimeout(pushProbe); pushProbe = null; }
+  pushStatus = "working";
+}
+
+/** Called after forwarding user input; warns into the notebook if nothing comes back. */
+function armPushProbe(notebookUrl: string) {
+  if (pushStatus !== "unknown" || pushProbe) return;
+  pushProbe = setTimeout(() => {
+    pushProbe = null;
+    if (pushStatus !== "unknown") return;
+    pushStatus = "silent";
+    const ws = pairedConnections.get(notebookUrl);
+    if (!ws) return;
+    ws.send(JSON.stringify({
+      type: "reply",
+      markdown: [
+        "**That message did not reach Claude.**",
+        "",
+        "Typing here needs *inbound push*, which is a separate Claude Code capability from the",
+        "tools Claude uses to drive this notebook. Restart Claude Code with:",
+        "",
+        "```",
+        "claude --dangerously-load-development-channels server:lopecode",
+        "```",
+        "",
+        "Until then this direction is one-way: ask Claude in the terminal instead, and it can",
+        "still read and edit this notebook normally.",
+      ].join("\n"),
+    }));
+    process.stderr.write("lopecode-channel: forwarded a message but saw no response — inbound push looks disabled\n");
+  }, PUSH_SILENCE_MS);
+  pushProbe.unref?.();
+}
+
 function broadcastActivity(toolName: string, summary: string) {
   if (pairedConnections.size === 0) return;
   const msg = JSON.stringify({
@@ -2113,6 +2173,7 @@ const server = createServer((req, res) => {
         const body = JSON.parse(raw);
         // The hook names this session's transcript exactly; nothing else here does.
         noteTranscriptPath(body.transcript_path);
+        notePushDelivered();   // Claude is doing work, so it is receiving from us
         const summary = summarizeToolUse(body.tool_name || "unknown", body.tool_input || {});
         if (summary) broadcastActivity(body.tool_name || "unknown", summary);
         send(200, "ok");

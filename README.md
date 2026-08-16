@@ -4,13 +4,38 @@ Pair program with Claude Code inside [Lopecode](https://tomlarkworthy.github.io/
 
 ## Quick Start
 
+Two commands, Node 20+, nothing global:
+
 ```bash
 claude mcp add lopecode -- npx -y @lopecode/channel
+claude --dangerously-load-development-channels server:lopecode
 ```
 
-That's it — Node 20+, nothing installed globally, no plugin. Then ask Claude: **"Open a lopecode notebook"**
+Then ask Claude: **"Open a lopecode notebook"**. Claude gets a pairing token, opens the
+notebook in your browser, and auto-connects.
 
-Claude gets a pairing token, opens the notebook in your browser, and auto-connects.
+The second command is what makes the pairing two-way, and it is worth understanding before
+you paste it. Claude driving the notebook — `define_cell`, `run_tests`, everything in the
+tool table below — needs only the first command. The notebook driving *Claude* — the chat
+box, `variable_update` and `cell_change` arriving in Claude's context unprompted — is a
+separate Claude Code capability (`experimental: { "claude/channel": {} }`) behind an
+allowlist that this plugin is not on. The flag's own help says it "is for local channel
+development only. Do not use this option to run channels you have downloaded off the
+internet," and installing from npm is exactly that. It is the only route to inbound push
+for an individual user today; the alternatives, and why they do not help yet, are in
+[Inbound push without the flag](#inbound-push-without-the-flag).
+
+The flag applies per launch, so in practice:
+
+```bash
+alias claude-lope='claude --dangerously-load-development-channels server:lopecode'
+```
+
+Leave it off and nothing breaks — Claude → notebook still works, and typing in the notebook
+chat box reaches nobody. The channel notices that case: if it forwards a message and sees no
+response for 40 seconds it writes the reason, and this command, into the notebook chat.
+
+### Pairing a notebook you did not open locally
 
 The notebook does not have to be a local file: a notebook served from any origin (e.g.
 `https://tomlarkworthy.github.io/lopecode/notebooks/…`) can pair with your local channel over
@@ -23,21 +48,6 @@ Chrome 151 gates that connection behind the Local Network Access permission
 the site when prompted. Headless Chrome refuses it outright, so `verify-https-pairing.mjs`
 turns the gate off (`LOPE_E2E_DISABLE_LNA=1`) and keeps a gated run as an informational probe.
 
-### Inbound push (optional)
-
-The command above gives Claude every tool in the table below. What it does *not* give you is
-**inbound push** — the notebook chat box, `variable_update`, and `cell_change` arriving in
-Claude's context unprompted. That is a separate Claude Code capability
-(`experimental: { "claude/channel": {} }`) gated by an allowlist:
-
-```bash
-claude --channels server:lopecode                                  # allowlisted servers/plugins
-claude --dangerously-load-development-channels server:lopecode     # local dev; confirmation dialog at startup
-```
-
-Without one of those flags the channel degrades gracefully: Claude → notebook works, and the
-notebook → Claude direction is unavailable.
-
 ### Install as a plugin instead
 
 ```
@@ -46,7 +56,51 @@ notebook → Claude direction is unavailable.
 ```
 
 This repository is both the marketplace and the plugin. `dist/` is committed so the install
-is a clone with no build step.
+is a clone with no build step. The plugin declares its channel in `plugin.json`:
+
+```json
+"channels": [{ "server": "lopecode", "displayName": "Lopecode" }]
+```
+
+Installing as a plugin does not by itself remove the flag — see below.
+
+### Inbound push without the flag
+
+`--channels` takes tagged entries, and the tag decides which gate applies:
+
+```
+server:lopecode                              an MCP server (claude mcp add, or .mcp.json)
+plugin:lopecode-channel@lopecode-plugins     a plugin-provided channel
+```
+
+Only the `plugin:` form can reach the allowlist at all; a plugin-installed server selected as
+`server:…` still takes the server path and still needs the development flag. The allowlist
+itself is read from **managed settings only** — not `~/.claude/settings.json` — so
+self-allowlisting means writing a root-owned file:
+
+```jsonc
+// macOS: /Library/Application Support/ClaudeCode/managed-settings.json
+// Linux: /etc/claude-code/managed-settings.json
+{
+  "channelsEnabled": true,
+  "allowedChannelPlugins": [
+    { "marketplace": "lopecode-plugins", "plugin": "lopecode-channel" }
+  ]
+}
+```
+
+`channelsEnabled` is not redundant there. Claude Code's own description of it reads
+"claude.ai Teams/Enterprise: default off. Console: default on unless managed settings exist" —
+so a Console user who creates this file for the allowlist alone turns the whole feature off.
+
+Then:
+
+```bash
+claude --channels plugin:lopecode-channel@lopecode-plugins
+```
+
+This path is **untested** — it is read off the gate's behaviour in Claude Code 2.1.233, not
+run end to end. The development flag above is the path that has actually been used.
 
 ### Development
 
@@ -244,9 +298,9 @@ Tests pass if they don't throw. Use `run_tests` to execute all `test_*` cells.
 If you see the `@tomlarkworthy/claude-code-pairing` panel in a notebook but Claude isn't connected:
 
 1. Register with Claude: `claude mcp add lopecode -- npx -y @lopecode/channel`
-2. Ask Claude for a pairing token and paste it into the panel (or let Claude open the URL with `&cc=TOKEN`)
-
-Add `--channels server:lopecode` at startup if you also want the notebook's chat box to reach Claude.
+2. Start Claude with `--dangerously-load-development-channels server:lopecode`, or the panel's
+   chat box will accept what you type and send it nowhere ([why](#quick-start))
+3. Ask Claude for a pairing token and paste it into the panel (or let Claude open the URL with `&cc=TOKEN`)
 
 ## Environment Variables
 

@@ -20168,6 +20168,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const args = req.params.arguments ?? {};
+  notePushDelivered();
   try {
     if (req.params.name === "get_pairing_token") {
       return { content: [{ type: "text", text: PAIRING_TOKEN }] };
@@ -20776,6 +20777,7 @@ ${pathList}`;
           }
         });
       }
+      armPushProbe(notebookUrl);
       break;
     }
     case "cell-change": {
@@ -20867,6 +20869,44 @@ function handleWsClose(ws) {
       removePortFile();
     }
   }
+}
+var pushStatus = "unknown";
+var pushProbe = null;
+var PUSH_SILENCE_MS = Number(process.env.LOPECODE_PUSH_SILENCE_MS) || 4e4;
+function notePushDelivered() {
+  if (pushProbe) {
+    clearTimeout(pushProbe);
+    pushProbe = null;
+  }
+  pushStatus = "working";
+}
+function armPushProbe(notebookUrl) {
+  if (pushStatus !== "unknown" || pushProbe) return;
+  pushProbe = setTimeout(() => {
+    pushProbe = null;
+    if (pushStatus !== "unknown") return;
+    pushStatus = "silent";
+    const ws = pairedConnections.get(notebookUrl);
+    if (!ws) return;
+    ws.send(JSON.stringify({
+      type: "reply",
+      markdown: [
+        "**That message did not reach Claude.**",
+        "",
+        "Typing here needs *inbound push*, which is a separate Claude Code capability from the",
+        "tools Claude uses to drive this notebook. Restart Claude Code with:",
+        "",
+        "```",
+        "claude --dangerously-load-development-channels server:lopecode",
+        "```",
+        "",
+        "Until then this direction is one-way: ask Claude in the terminal instead, and it can",
+        "still read and edit this notebook normally."
+      ].join("\n")
+    }));
+    process.stderr.write("lopecode-channel: forwarded a message but saw no response \u2014 inbound push looks disabled\n");
+  }, PUSH_SILENCE_MS);
+  pushProbe.unref?.();
 }
 function broadcastActivity(toolName, summary) {
   if (pairedConnections.size === 0) return;
@@ -21028,6 +21068,7 @@ var server = createServer((req, res) => {
       try {
         const body = JSON.parse(raw);
         noteTranscriptPath(body.transcript_path);
+        notePushDelivered();
         const summary = summarizeToolUse(body.tool_name || "unknown", body.tool_input || {});
         if (summary) broadcastActivity(body.tool_name || "unknown", summary);
         send(200, "ok");

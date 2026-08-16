@@ -18,5 +18,11 @@
     "observable"
   ],
   "mcpServers": "./mcp.json",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "channels": [
+    {
+      "server": "lopecode",
+      "displayName": "Lopecode"
+    }
+  ]
 }
