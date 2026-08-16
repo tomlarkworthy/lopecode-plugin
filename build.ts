@@ -15,7 +15,7 @@ const result = await build({
   platform: "node",
   format: "esm",
   target: "node20",
-  // playwright is an optionalDependency loaded lazily by the qa_* tools.
+  // playwright is not shipped; the qa_* tools import it lazily and report if it is missing.
   external: ["playwright"],
   // Bundled CJS deps expect `require`; ESM output has none.
   banner: { js: "import{createRequire as __cr}from'module';const require=__cr(import.meta.url);" },

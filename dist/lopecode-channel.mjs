@@ -19271,8 +19271,17 @@ async function ensureQaSession(name, opts = {}) {
     qaLaunching.delete(name);
   }
 }
+async function loadChromium() {
+  try {
+    return (await import("playwright")).chromium;
+  } catch {
+    throw new Error(
+      "the qa_* tools need playwright, which is not bundled. Install it once with `npm i -g playwright && npx playwright install chromium`, then retry. Pairing, define_cell and the other tools do not need it."
+    );
+  }
+}
 async function launchQaSession(name, opts) {
-  const { chromium } = await import("playwright");
+  const chromium = await loadChromium();
   const launchArgs = [...opts.chromiumArgs ?? []];
   if (opts.disableWebSecurity) launchArgs.push("--disable-web-security");
   const browser = await chromium.launch({

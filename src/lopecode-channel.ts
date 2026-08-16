@@ -183,8 +183,22 @@ async function ensureQaSession(name: string, opts: QaLaunchOpts = {}): Promise<Q
   }
 }
 
+// playwright is not a dependency — it is ~20MB and only the qa_* tools use it, so it would
+// otherwise be paid for on every `npx -y @lopecode/channel` cold start.
+async function loadChromium() {
+  try {
+    return (await import("playwright")).chromium;
+  } catch {
+    throw new Error(
+      "the qa_* tools need playwright, which is not bundled. Install it once with " +
+      "`npm i -g playwright && npx playwright install chromium`, then retry. " +
+      "Pairing, define_cell and the other tools do not need it.",
+    );
+  }
+}
+
 async function launchQaSession(name: string, opts: QaLaunchOpts): Promise<QaSession> {
-  const { chromium } = await import("playwright");
+  const chromium = await loadChromium();
   // Disabling web security turns off same-origin/CORS enforcement so a notebook
   // can fetch cross-origin without proxying — for local testing only. Do NOT
   // also disable site isolation: forcing single-process rendering deadlocks

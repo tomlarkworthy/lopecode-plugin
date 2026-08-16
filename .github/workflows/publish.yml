@@ -32,7 +32,9 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install --no-audit --no-fund --omit=optional
+      - run: npm install --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'   # devDep; this job never launches a browser
 
       # The tag names the release; package.json is what actually gets published.
       - name: Check the tag matches package.json

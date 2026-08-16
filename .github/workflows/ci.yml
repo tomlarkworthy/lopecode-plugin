@@ -16,8 +16,11 @@ jobs:
         with:
           node-version: '20'   # the floor declared in package.json engines
 
-      # playwright is an optionalDependency used only by the qa_* tools and the e2e job.
-      - run: npm install --no-audit --no-fund --omit=optional
+      # playwright is a devDependency (qa_* tools and the e2e job load it lazily); its
+      # postinstall would pull ~150MB of browsers this job never launches.
+      - run: npm install --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
       - run: bun run build.ts
 
@@ -45,14 +48,15 @@ jobs:
           claude plugin validate .
 
       # Proves `claude mcp add lopecode -- npx -y @lopecode/channel`: the packed tarball
-      # must run with no transitive runtime dependencies.
+      # must install with no dependencies at all — a plain install, no --omit flags, is
+      # what a user's npx actually runs.
       - name: Verify packed tarball (npx path)
         run: |
           set -euo pipefail
           TGZ=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
           mkdir -p "$RUNNER_TEMP/npxtest" && cd "$RUNNER_TEMP/npxtest"
           npm init -y >/dev/null
-          npm install --no-audit --no-fund --omit=optional "$RUNNER_TEMP/$TGZ"
+          npm install --no-audit --no-fund "$RUNNER_TEMP/$TGZ"
           DEPS=$(ls node_modules | grep -v '^\.' | grep -v '^@lopecode$' || true)
           if [ -n "$DEPS" ]; then echo "unexpected runtime deps: $DEPS"; exit 1; fi
           node "$GITHUB_WORKSPACE/verify-node-build.mjs" \
