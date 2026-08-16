@@ -9,6 +9,8 @@
 import { describe, it, beforeAll, afterAll, expect } from "bun:test";
 import { spawn, type Subprocess } from "bun";
 import path from "path";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from "fs";
+import { tmpdir } from "os";
 
 const CHANNEL_SCRIPT = path.join(import.meta.dir, "../src/lopecode-channel.ts");
 
@@ -301,5 +303,110 @@ describe("lopecode-channel server", () => {
       expect(res.status).toBe(200);
       ws.close();
     });
+  });
+});
+
+/**
+ * The activity feed tails this session's transcript. It used to find it by scanning
+ * ~/.claude/projects for the newest .jsonl, which tails whichever project was touched
+ * most recently — someone else's session — whenever the channel runs outside a project
+ * or under a CLAUDE_CONFIG_DIR that is not ~/.claude.
+ */
+describe("session log resolution", () => {
+  let configDir: string;
+  let ownLog: string;
+  const SESSION_ID = "11111111-2222-3333-4444-555555555555";
+
+  beforeAll(() => {
+    configDir = mkdtempSync(path.join(tmpdir(), "lope-cfg-"));
+    // Our session's transcript, deliberately the OLDER file.
+    const mine = path.join(configDir, "projects", "-home-me-my-project");
+    mkdirSync(mine, { recursive: true });
+    ownLog = path.join(mine, `${SESSION_ID}.jsonl`);
+    writeFileSync(ownLog, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(ownLog, old, old);
+    // An unrelated project, touched more recently — the old heuristic's winner.
+    const other = path.join(configDir, "projects", "-home-me-someone-elses-project");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(path.join(other, "99999999-aaaa-bbbb-cccc-dddddddddddd.jsonl"), "");
+  });
+
+  afterAll(() => rmSync(configDir, { recursive: true, force: true }));
+
+  /** Start a server with a scrubbed environment and return its startup stderr. */
+  async function startupStderr(extraEnv: Record<string, string>): Promise<{ proc: Subprocess; stderr: string; port: number }> {
+    const env: Record<string, string> = { ...process.env as any, LOPECODE_PORT: "0", CLAUDE_CONFIG_DIR: configDir, ...extraEnv };
+    // The test runner is itself a Claude Code child; its session must not leak in.
+    if (!("CLAUDE_CODE_SESSION_ID" in extraEnv)) delete env.CLAUDE_CODE_SESSION_ID;
+
+    const proc = spawn(["bun", "run", CHANNEL_SCRIPT], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value);
+      // The tail line is written last, after the port line.
+      if (/session log tailing started|session not identified/.test(buf)) break;
+    }
+    reader.releaseLock();
+    const port = Number(buf.match(/WebSocket server on ws:\/\/127\.0\.0\.1:(\d+)/)?.[1]);
+    return { proc, stderr: buf, port };
+  }
+
+  it("tails the session named by CLAUDE_CODE_SESSION_ID, not the newest transcript", async () => {
+    const { proc, stderr } = await startupStderr({ CLAUDE_CODE_SESSION_ID: SESSION_ID });
+    try {
+      expect(stderr).toContain(`session log tailing started (${SESSION_ID}.jsonl)`);
+      expect(stderr).not.toContain("99999999-aaaa-bbbb-cccc-dddddddddddd");
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it("tails nothing when the session cannot be identified", async () => {
+    const { proc, stderr } = await startupStderr({});
+    try {
+      expect(stderr).toContain("session not identified yet");
+      expect(stderr).not.toContain("99999999-aaaa-bbbb-cccc-dddddddddddd");
+    } finally {
+      proc.kill();
+    }
+  });
+
+  it("adopts the transcript_path the PostToolUse hook reports", async () => {
+    const { proc, stderr, port } = await startupStderr({});
+    try {
+      expect(stderr).toContain("session not identified yet");
+      const res = await fetch(`http://127.0.0.1:${port}/tool-activity`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id: SESSION_ID,
+          transcript_path: ownLog,
+          tool_name: "Bash",
+          tool_input: { command: "echo hi" },
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      // The tailer re-resolves on its 500ms poll.
+      const reader = (proc.stderr as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !buf.includes(`${SESSION_ID}.jsonl`)) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value);
+      }
+      reader.releaseLock();
+      expect(buf).toContain(`tailing session log ${SESSION_ID}.jsonl`);
+    } finally {
+      proc.kill();
+    }
   });
 });

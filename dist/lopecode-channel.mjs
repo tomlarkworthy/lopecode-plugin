@@ -20891,59 +20891,45 @@ function summarizeToolUse(name, input) {
   if (name === "Agent" && input.description) return `Agent: ${input.description}`;
   return name;
 }
-function discoverLogDir() {
-  const projectsBase = join(homedir(), ".claude", "projects");
-  const explicitDir = process.env.LOPECODE_PROJECT_DIR;
-  if (explicitDir) {
-    const sanitized = explicitDir.replace(/\//g, "-");
-    const logDir = join(projectsBase, sanitized);
+var hookTranscriptPath = null;
+function noteTranscriptPath(p) {
+  if (typeof p !== "string" || !p.endsWith(".jsonl")) return;
+  if (p === hookTranscriptPath) return;
+  hookTranscriptPath = p;
+}
+function claudeProjectsBase() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return join(configDir && configDir.length > 0 ? configDir : join(homedir(), ".claude"), "projects");
+}
+function findLogBySessionId(sessionId) {
+  const projectsBase = claudeProjectsBase();
+  const target = `${sessionId}.jsonl`;
+  let dirs;
+  try {
+    dirs = readdirSync(projectsBase);
+  } catch {
+    return null;
+  }
+  for (const dir of dirs) {
+    const candidate = join(projectsBase, dir, target);
     try {
-      statSync(logDir);
-      return logDir;
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function resolveSessionLog() {
+  if (hookTranscriptPath) {
+    try {
+      if (statSync(hookTranscriptPath).isFile()) return hookTranscriptPath;
     } catch {
     }
   }
-  const cwd = process.cwd();
-  const sanitizedCwd = cwd.replace(/\//g, "-");
-  const cwdLogDir = join(projectsBase, sanitizedCwd);
-  try {
-    statSync(cwdLogDir);
-    return cwdLogDir;
-  } catch {
-  }
-  try {
-    const dirs = readdirSync(projectsBase);
-    let bestDir = null;
-    let bestMtime = 0;
-    for (const dir of dirs) {
-      const fullDir = join(projectsBase, dir);
-      try {
-        const st = statSync(fullDir);
-        if (!st.isDirectory()) continue;
-        const files = readdirSync(fullDir).filter((f) => f.endsWith(".jsonl"));
-        for (const f of files) {
-          const mtime = statSync(join(fullDir, f)).mtimeMs;
-          if (mtime > bestMtime) {
-            bestMtime = mtime;
-            bestDir = fullDir;
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-    return bestDir;
-  } catch {
-    return null;
-  }
-}
-function findNewestLog(dir) {
-  try {
-    const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.mtime - a.mtime);
-    return files.length > 0 ? join(dir, files[0].name) : null;
-  } catch {
-    return null;
-  }
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (sessionId) return findLogBySessionId(sessionId);
+  return null;
 }
 function processLogEntry(line) {
   try {
@@ -20974,16 +20960,11 @@ function processLogEntry(line) {
   }
 }
 function startSessionLogTail() {
-  const logDir = discoverLogDir();
-  if (!logDir) {
-    process.stderr.write("lopecode-channel: could not discover session log directory\n");
-    return;
-  }
   let currentLogPath = null;
   let fileOffset = 0;
   let partialLine = "";
   async function readNewLines() {
-    const newest = findNewestLog(logDir);
+    const newest = resolveSessionLog();
     if (!newest) return;
     if (newest !== currentLogPath) {
       currentLogPath = newest;
@@ -21021,8 +21002,9 @@ function startSessionLogTail() {
   }
   const interval = setInterval(readNewLines, 500);
   process.on("exit", () => clearInterval(interval));
-  process.stderr.write(`lopecode-channel: session log tailing started (dir: ${basename(logDir)})
-`);
+  const initial = resolveSessionLog();
+  process.stderr.write(initial ? `lopecode-channel: session log tailing started (${basename(initial)})
+` : "lopecode-channel: session not identified yet; tailing starts when the PostToolUse hook reports transcript_path\n");
 }
 await mcp.connect(new StdioServerTransport());
 var server = createServer((req, res) => {
@@ -21045,6 +21027,7 @@ var server = createServer((req, res) => {
     req.on("end", () => {
       try {
         const body = JSON.parse(raw);
+        noteTranscriptPath(body.transcript_path);
         const summary = summarizeToolUse(body.tool_name || "unknown", body.tool_input || {});
         if (summary) broadcastActivity(body.tool_name || "unknown", summary);
         send(200, "ok");

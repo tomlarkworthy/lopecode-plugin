@@ -1932,71 +1932,60 @@ function summarizeToolUse(name: string, input: Record<string, any>): string | nu
 }
 
 /**
- * Discover the Claude Code session log directory.
+ * Resolve the transcript of the session that spawned us. Transcripts live at
+ * <config>/projects/<sanitized-cwd>/<session-id>.jsonl, and both halves of that path
+ * are things we must not guess:
  *
- * Strategy:
- * 1. If LOPECODE_PROJECT_DIR env var is set, use that as the project CWD
- * 2. Otherwise, scan ~/.claude/projects/ for the directory with the most recently
- *    modified .jsonl file (the active session)
+ *  - <config> is CLAUDE_CONFIG_DIR when set, not always ~/.claude.
+ *  - <sanitized-cwd> is the project root, which is not process.cwd() — a channel started
+ *    from a subdirectory sanitizes to a directory that does not exist.
  *
- * Claude Code stores logs at ~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl
- * where sanitized-cwd replaces / with -
+ * Guessing either one lands on another project's session, so there is no heuristic
+ * fallback: a session we cannot name exactly is a session we do not tail.
+ *
+ * Sources, both exact:
+ *  1. transcript_path from the PostToolUse hook payload — authoritative, but only
+ *     arrives once the session makes its first tool call.
+ *  2. CLAUDE_CODE_SESSION_ID, matched by filename across the project dirs. Available at
+ *     startup, so tailing begins before the first hook fires.
  */
-function discoverLogDir(): string | null {
-  const projectsBase = join(homedir(), ".claude", "projects");
+let hookTranscriptPath: string | null = null;
 
-  // Strategy 1: explicit project dir
-  const explicitDir = process.env.LOPECODE_PROJECT_DIR;
-  if (explicitDir) {
-    const sanitized = explicitDir.replace(/\//g, "-");
-    const logDir = join(projectsBase, sanitized);
-    try { statSync(logDir); return logDir; } catch { /* fall through */ }
-  }
-
-  // Strategy 2: try CWD (works when channel runs in-process)
-  const cwd = process.cwd();
-  const sanitizedCwd = cwd.replace(/\//g, "-");
-  const cwdLogDir = join(projectsBase, sanitizedCwd);
-  try { statSync(cwdLogDir); return cwdLogDir; } catch { /* fall through */ }
-
-  // Strategy 3: find the project dir with the most recently modified .jsonl
-  try {
-    const dirs = readdirSync(projectsBase);
-    let bestDir: string | null = null;
-    let bestMtime = 0;
-    for (const dir of dirs) {
-      const fullDir = join(projectsBase, dir);
-      try {
-        const st = statSync(fullDir);
-        if (!st.isDirectory()) continue;
-        // Check newest jsonl in this dir
-        const files = readdirSync(fullDir).filter(f => f.endsWith(".jsonl"));
-        for (const f of files) {
-          const mtime = statSync(join(fullDir, f)).mtimeMs;
-          if (mtime > bestMtime) {
-            bestMtime = mtime;
-            bestDir = fullDir;
-          }
-        }
-      } catch { continue; }
-    }
-    return bestDir;
-  } catch {
-    return null;
-  }
+/** Record the transcript path the PostToolUse hook reported. */
+function noteTranscriptPath(p: unknown) {
+  if (typeof p !== "string" || !p.endsWith(".jsonl")) return;
+  if (p === hookTranscriptPath) return;
+  hookTranscriptPath = p;
 }
 
-/** Find the most recently modified .jsonl file in a directory */
-function findNewestLog(dir: string): string | null {
-  try {
-    const files = readdirSync(dir)
-      .filter(f => f.endsWith(".jsonl"))
-      .map(f => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return files.length > 0 ? join(dir, files[0].name) : null;
-  } catch {
-    return null;
+function claudeProjectsBase(): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return join(configDir && configDir.length > 0 ? configDir : join(homedir(), ".claude"), "projects");
+}
+
+/** Locate the `<session-id>.jsonl` file under any project dir, by exact filename. */
+function findLogBySessionId(sessionId: string): string | null {
+  const projectsBase = claudeProjectsBase();
+  const target = `${sessionId}.jsonl`;
+  let dirs: string[];
+  try { dirs = readdirSync(projectsBase); } catch { return null; }
+  for (const dir of dirs) {
+    const candidate = join(projectsBase, dir, target);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { continue; }
   }
+  return null;
+}
+
+/** The transcript to tail, or null if this session cannot be identified. */
+function resolveSessionLog(): string | null {
+  if (hookTranscriptPath) {
+    try { if (statSync(hookTranscriptPath).isFile()) return hookTranscriptPath; } catch { /* not yet written */ }
+  }
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (sessionId) return findLogBySessionId(sessionId);
+  return null;
 }
 
 /** Parse a JSONL log entry and broadcast relevant activity */
@@ -2039,19 +2028,13 @@ function processLogEntry(line: string) {
  * Polls file size and reads the appended range from the JSONL file.
  */
 function startSessionLogTail() {
-  const logDir = discoverLogDir();
-  if (!logDir) {
-    process.stderr.write("lopecode-channel: could not discover session log directory\n");
-    return;
-  }
-
   let currentLogPath: string | null = null;
   let fileOffset = 0;
   let partialLine = "";
 
   async function readNewLines() {
-    // Check if there's a newer log file (session rotation)
-    const newest = findNewestLog(logDir);
+    // Re-resolve every tick: the hook's transcript_path may only arrive after startup.
+    const newest = resolveSessionLog();
     if (!newest) return;
 
     if (newest !== currentLogPath) {
@@ -2095,7 +2078,10 @@ function startSessionLogTail() {
   const interval = setInterval(readNewLines, 500);
   process.on("exit", () => clearInterval(interval));
 
-  process.stderr.write(`lopecode-channel: session log tailing started (dir: ${basename(logDir)})\n`);
+  const initial = resolveSessionLog();
+  process.stderr.write(initial
+    ? `lopecode-channel: session log tailing started (${basename(initial)})\n`
+    : "lopecode-channel: session not identified yet; tailing starts when the PostToolUse hook reports transcript_path\n");
 }
 
 // Connect MCP stdio transport FIRST (must happen before the HTTP listen so Claude Code
@@ -2125,6 +2111,8 @@ const server = createServer((req, res) => {
     req.on("end", () => {
       try {
         const body = JSON.parse(raw);
+        // The hook names this session's transcript exactly; nothing else here does.
+        noteTranscriptPath(body.transcript_path);
         const summary = summarizeToolUse(body.tool_name || "unknown", body.tool_input || {});
         if (summary) broadcastActivity(body.tool_name || "unknown", summary);
         send(200, "ok");
