@@ -100,11 +100,32 @@ jobs:
           LOPE_E2E_DISABLE_LNA: '1'
         run: node verify-https-pairing.mjs
 
-  # Drives a real Claude Code that has never seen this project through the shipped instructions.
-  # Costs tokens and needs a key, so it only runs where ANTHROPIC_API_KEY exists; exit 2 means
-  # "no usable credentials", which is reported rather than treated as a pass.
-  vanilla-instructions:
+  # Whether the vanilla check can run at all. It exists so a missing key makes that job show as
+  # *skipped* rather than green: a green tick for a check that never executed is worse than no
+  # check, and secrets cannot be read in a job-level `if` without going through an output.
+  credentials:
     if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      has_api_key: ${{ steps.probe.outputs.has_api_key }}
+    steps:
+      - id: probe
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${KEY:-}" ]; then
+            echo "has_api_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_api_key=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=vanilla-instructions not run::No ANTHROPIC_API_KEY secret, so the shipped instructions were never exercised by a real agent this run."
+          fi
+
+  # Drives a real Claude Code that has never seen this project through the shipped instructions.
+  # Costs tokens, so it is off the PR path. exit 2 means "no usable credentials" and is turned
+  # into a failure here: reaching this job at all means the key was supposed to work.
+  vanilla-instructions:
+    needs: credentials
+    if: needs.credentials.outputs.has_api_key == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,13 +142,15 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "no ANTHROPIC_API_KEY secret — skipping (this check cannot run unauthenticated)"
-            exit 0
-          fi
           set +e
           node verify-vanilla-instructions.mjs
           code=$?
           set -e
-          if [ "$code" = "2" ]; then echo "credentials were rejected — see output above"; exit 1; fi
+          # 2 is the harness saying it had no usable credentials. The gate job already
+          # established the key exists, so here that means the key was rejected — a failure,
+          # never a quiet pass.
+          if [ "$code" = "2" ]; then
+            echo "::error title=credentials rejected::ANTHROPIC_API_KEY is present but claude could not authenticate"
+            exit 1
+          fi
           exit "$code"
