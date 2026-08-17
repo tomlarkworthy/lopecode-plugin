@@ -111,13 +111,17 @@ jobs:
     steps:
       - id: probe
         env:
-          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -n "${KEY:-}" ]; then
+          # Either credential drives the check. OpenRouter serves the Anthropic Messages API,
+          # so it needs no proxy, and being env-based it allows a throwaway config dir — which
+          # an interactive login cannot, so it is the more isolated of the two.
+          if [ -n "${ANTHROPIC:-}" ] || [ -n "${OPENROUTER:-}" ]; then
             echo "has_api_key=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_api_key=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=vanilla-instructions not run::No ANTHROPIC_API_KEY secret, so the shipped instructions were never exercised by a real agent this run."
+            echo "::warning title=vanilla-instructions not run::Neither ANTHROPIC_API_KEY nor OPENROUTER_API_KEY is set, so the shipped instructions were never exercised by a real agent this run."
           fi
 
   # Drives a real Claude Code that has never seen this project through the shipped instructions.
@@ -141,7 +145,17 @@ jobs:
       - name: Can a vanilla Claude Code follow the instructions?
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          # Prefer a real Claude when a key exists — that is the model users run. Otherwise go
+          # through OpenRouter, which is a harder test rather than an easier one: instructions a
+          # non-Claude model can follow are instructions that do not lean on the reader.
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            unset ANTHROPIC_API_KEY
+            export ANTHROPIC_BASE_URL=https://openrouter.ai/api
+            export ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY"
+            export ANTHROPIC_MODEL="${VANILLA_MODEL:-xiaomi/mimo-v2.5-pro}"
+          fi
           set +e
           node verify-vanilla-instructions.mjs
           code=$?

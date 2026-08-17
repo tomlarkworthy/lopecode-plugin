@@ -19,9 +19,24 @@
  *
  *   node verify-vanilla-instructions.mjs [--keep] [--prompt "..."]
  *
- * With ANTHROPIC_API_KEY set the config dir is isolated too (a true vanilla profile). Without
- * it, auth lives in a keychain entry keyed to the real config dir, so that dir is reused and
- * the mode is reported as `config-dir-shared` — a weaker claim, printed as such.
+ * Credentials decide how vanilla the run can be, and the mode is printed rather than assumed:
+ *
+ *   ANTHROPIC_API_KEY                            → fully-isolated, real Claude
+ *   ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN    → fully-isolated, whatever that endpoint serves
+ *   neither                                      → config-dir-shared, a weaker claim
+ *
+ * OpenRouter serves the Anthropic Messages API at https://openrouter.ai/api, so an OpenRouter
+ * key runs this with no Anthropic key and no proxy:
+ *
+ *   ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY \
+ *   ANTHROPIC_MODEL=xiaomi/mimo-v2.5-pro node verify-vanilla-instructions.mjs
+ *
+ * Two things that buys, and one it does not. It buys a genuinely empty config dir (an
+ * interactive login cannot: the keychain entry is keyed per config dir), and it buys a harder
+ * test — instructions a non-Claude model can follow are instructions that do not lean on the
+ * reader. It does not buy coverage of inbound push: the channel gate's first branch is
+ * `if (Jn() !== "firstParty") … "channels are not available on third-party providers"`, so a
+ * custom endpoint can never exercise the notebook → Claude direction.
  */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, existsSync, readFileSync, appendFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -86,30 +101,49 @@ const settings = join(root, "settings.json");
 writeFileSync(settings, "{}");
 
 // --- credentials decide how vanilla we can be -----------------------------------------------
-const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
+//
+// Anything that authenticates by env var can also run against a throwaway config dir, which is
+// what makes a fully vanilla profile possible: an interactive login cannot, because the keychain
+// entry is keyed per config dir (Claude Code-credentials-<hash>), so a fresh dir has no
+// credentials and `claude -p` reports "Not logged in".
+//
+// ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN covers any Anthropic-Messages-compatible endpoint.
+// OpenRouter serves one at https://openrouter.ai/api, so an OpenRouter key drives this check
+// with no Anthropic key and no translating proxy.
+const byApiKey = !!process.env.ANTHROPIC_API_KEY;
+const byToken = !!(process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN);
+const isolatable = byApiKey || byToken;
 const cfgDir = join(root, "config");
-if (hasApiKey) mkdirSync(cfgDir, { recursive: true });
-const mode = hasApiKey ? "fully-isolated" : "config-dir-shared";
+if (isolatable) mkdirSync(cfgDir, { recursive: true });
+const mode = isolatable ? "fully-isolated" : "config-dir-shared";
+const provider = byToken ? (process.env.ANTHROPIC_BASE_URL ?? "custom") : "anthropic";
+const model = process.env.ANTHROPIC_MODEL ?? "(Claude Code default)";
 
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RPC_LOG, ERR_LOG, BROWSER_RESULT };
 // A session's own identity must not leak into the child, or it tails our transcript and
 // resolves our project rather than starting clean.
 for (const k of ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PROJECT_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_EFFORT", "CLAUDE_PID"]) delete env[k];
-if (hasApiKey) env.CLAUDE_CONFIG_DIR = cfgDir;
+if (isolatable) env.CLAUDE_CONFIG_DIR = cfgDir;
+// Background work (session titles and the like) otherwise reaches for a Claude model the
+// custom endpoint may not serve.
+if (byToken && process.env.ANTHROPIC_MODEL && !process.env.ANTHROPIC_SMALL_FAST_MODEL) {
+  env.ANTHROPIC_SMALL_FAST_MODEL = process.env.ANTHROPIC_MODEL;
+}
 
 // Structural proof of what was actually isolated, rather than a claim that it was.
 const isolation = {
   cwd: ws,
   cwdHasClaudeMd: existsSync(join(ws, "CLAUDE.md")),
   cwdHasMcpJson: existsSync(join(ws, ".mcp.json")),
-  configDir: hasApiKey ? cfgDir : (process.env.CLAUDE_CONFIG_DIR ?? "~/.claude"),
-  configDirHasClaudeMd: existsSync(join(hasApiKey ? cfgDir : (process.env.CLAUDE_CONFIG_DIR ?? ""), "CLAUDE.md")),
-  mode,
+  configDir: isolatable ? cfgDir : (process.env.CLAUDE_CONFIG_DIR ?? "~/.claude"),
+  configDirHasClaudeMd: existsSync(join(isolatable ? cfgDir : (process.env.CLAUDE_CONFIG_DIR ?? ""), "CLAUDE.md")),
+  mode, provider, model,
 };
 if (isolation.cwdHasClaudeMd || isolation.cwdHasMcpJson) fail.push("workspace was not clean");
 if (isolation.configDirHasClaudeMd) fail.push(`a user-level CLAUDE.md at ${isolation.configDir} still applies — this run is not vanilla`);
 
-note(`mode: ${mode}${hasApiKey ? "" : "  (set ANTHROPIC_API_KEY to isolate the config dir too)"}`);
+note(`mode: ${mode}   provider: ${provider}   model: ${model}`);
+if (!isolatable) note("  (set ANTHROPIC_API_KEY, or ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN, to isolate the config dir too)");
 note(`prompt: ${JSON.stringify(PROMPT)}`);
 note("running claude…");
 
@@ -177,16 +211,19 @@ async function classify(target) {
 }
 
 let portablePaired = false;
+const reported = new Set();   // an agent may open the same URL repeatedly; say so once
 for (const o of openers) {
   const url = String(o.args.url ?? "");
   const target = url.split("#")[0];
   const cls = await classify(target);
   const paired = pairedUrls.has(url);
-  note(`opened ${cls.portable ? "portable" : "MACHINE-LOCAL"}${paired ? ", paired" : ", did not pair"}: ${url}`);
-
-  if (!/cc=LOPE-\d+-/.test(url)) fail.push(`URL carries no pairing token: ${url}`);
-  if (!url.includes("#")) fail.push(`URL carries no hash layout: ${url}`);
-  if (!cls.portable) fail.push(`the instructions sent the agent to ${cls.why}`);
+  if (!reported.has(url)) {
+    reported.add(url);
+    note(`opened ${cls.portable ? "portable" : "MACHINE-LOCAL"}${paired ? ", paired" : ", did not pair"}: ${url}`);
+    if (!/cc=LOPE-\d+-/.test(url)) fail.push(`URL carries no pairing token: ${url}`);
+    if (!url.includes("#")) fail.push(`URL carries no hash layout: ${url}`);
+    if (!cls.portable) fail.push(`the instructions sent the agent to ${cls.why}`);
+  }
   if (cls.portable && paired) portablePaired = true;
 }
 
@@ -200,7 +237,7 @@ if (openers.length && !portablePaired) {
     : "no portable notebook URL ever paired — reaching a notebook depended on files only this machine has");
 }
 
-writeFileSync(join(root, "verdict.json"), JSON.stringify({ mode, isolation, calls, browserResults, fail }, null, 2));
+writeFileSync(join(root, "verdict.json"), JSON.stringify({ mode, provider, model, isolation, calls, browserResults, fail }, null, 2));
 
 if (fail.length) {
   console.error(`\nFAIL — the shipped instructions are not usable as-is:`);
@@ -212,5 +249,5 @@ if (fail.length) {
   process.exit(1);
 }
 
-note(`\nPASS — a vanilla Claude Code followed the shipped instructions to a paired notebook (${mode})`);
+note(`\nPASS — a vanilla Claude Code followed the shipped instructions to a paired notebook (${mode}, ${model})`);
 cleanup();

@@ -124,9 +124,26 @@ node verify-vanilla-instructions.mjs              # a Claude Code that has never
 it with an empty cwd (no `CLAUDE.md`, no `.mcp.json`), `--strict-mcp-config` and empty settings,
 shadows `open`/`xdg-open` with a headless Playwright stub, and asks only *"Open a lopecode
 notebook"*. The verdict comes from the channel's own `/health`, so a plausible-looking URL that
-does not pair still fails. Set `ANTHROPIC_API_KEY` to isolate the config dir as well — without it
-auth lives in a keychain entry keyed to the real config dir, so that dir is reused and the run
-reports `config-dir-shared` rather than claiming to be fully vanilla.
+does not pair still fails.
+
+It needs credentials in the environment, because that is also what lets it use a throwaway config
+dir: an interactive login cannot, since the keychain entry is keyed per config dir. Either works,
+and the run prints which it used:
+
+```bash
+ANTHROPIC_API_KEY=… node verify-vanilla-instructions.mjs           # real Claude
+
+ANTHROPIC_BASE_URL=https://openrouter.ai/api \
+ANTHROPIC_AUTH_TOKEN=$OPENROUTER_API_KEY \
+ANTHROPIC_MODEL=xiaomi/mimo-v2.5-pro \
+  node verify-vanilla-instructions.mjs                             # OpenRouter serves the
+                                                                   # Anthropic Messages API, so
+                                                                   # this needs no proxy
+```
+With neither, the real config dir is reused and the run reports `config-dir-shared` rather than
+claiming to be vanilla. A non-Claude model is a harder reader, not an easier one — but note that
+`channels are not available on third-party providers`, so a custom endpoint can only ever exercise
+Claude → notebook, never the inbound direction.
 
 To point a Claude Code session at a working copy rather than the published plugin:
 
