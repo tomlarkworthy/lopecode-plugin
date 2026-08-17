@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Lopecode notebook tools for Claude Code",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
       "name": "lopecode-channel",
       "source": ".",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "description": "Pair program with Claude inside Lopecode notebooks. Chat, watch variables, define cells, run tests — all from the browser.",
       "author": {
         "name": "Tom Larkworthy"
