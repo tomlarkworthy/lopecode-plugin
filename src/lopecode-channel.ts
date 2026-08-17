@@ -305,14 +305,23 @@ Lopecode notebooks are self-contained HTML files built on the Observable runtime
 
 When the user asks to start/open a lopecode notebook, or start a pairing/collaboration session:
 1. Call get_pairing_token to get the token (format: LOPE-PORT-XXXX)
-2. Find the local notebook HTML file (e.g. lopecode/notebooks/quick_start.html or lopebooks/notebooks/...)
-3. Construct a file:// URL with the hash layout and cc=TOKEN parameter:
-   file:///absolute/path/to/quick_start.html#view=R100(S50(@tomlarkworthy/blank-notebook),S25(@tomlarkworthy/module-selection),S25(@tomlarkworthy/claude-code-pairing))&cc=TOKEN
+2. Pick a notebook to open, in this order:
+   a. A notebook HTML file already in the current project (e.g. lopecode/notebooks/quick_start.html
+      or lopebooks/notebooks/...) — use it only if it is actually there.
+   b. Otherwise the hosted quick start:
+      https://tomlarkworthy.github.io/lopecode/notebooks/quick_start.html
+   Do NOT go searching the filesystem for a checkout outside the current project. Most users have
+   none, and a notebook found somewhere else on the machine is not the one they are working in.
+3. Append the hash layout and cc=TOKEN to whichever URL you picked:
+   <url>#view=R100(S50(@tomlarkworthy/blank-notebook),S25(@tomlarkworthy/module-selection),S25(@tomlarkworthy/claude-code-pairing))&cc=TOKEN
 4. Use the open_url tool to open it (this preserves hash fragments on file:// URLs — the macOS open command strips them)
 5. Wait for the connected notification
 6. Send a welcome message via reply
 
-Always use file:// paths to local notebooks, never GitHub Pages URLs. The open_url tool handles the macOS bug where the open command strips hash fragments from file:// URLs.
+A local file is preferred when one exists, because edits can be saved back to it; the hosted
+notebook pairs just as well over ws://127.0.0.1 but has no file on disk to export to. Call
+open_url without a browser argument — it already handles the macOS bug where the open command
+strips hash fragments from file:// URLs, and naming a browser binary yourself bypasses that.
 
 If channels are not enabled, tell the user to restart with: claude --channels server:lopecode
 

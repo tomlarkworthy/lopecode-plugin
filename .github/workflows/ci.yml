@@ -99,3 +99,35 @@ jobs:
         env:
           LOPE_E2E_DISABLE_LNA: '1'
         run: node verify-https-pairing.mjs
+
+  # Drives a real Claude Code that has never seen this project through the shipped instructions.
+  # Costs tokens and needs a key, so it only runs where ANTHROPIC_API_KEY exists; exit 2 means
+  # "no usable credentials", which is reported rather than treated as a pass.
+  vanilla-instructions:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: bun run build.ts
+      - run: npm install -g @anthropic-ai/claude-code
+
+      - name: Can a vanilla Claude Code follow the instructions?
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "no ANTHROPIC_API_KEY secret — skipping (this check cannot run unauthenticated)"
+            exit 0
+          fi
+          set +e
+          node verify-vanilla-instructions.mjs
+          code=$?
+          set -e
+          if [ "$code" = "2" ]; then echo "credentials were rejected — see output above"; exit 1; fi
+          exit "$code"

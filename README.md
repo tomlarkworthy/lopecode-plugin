@@ -116,7 +116,17 @@ bun test ./tests/lopecode-channel.test.ts
 node verify-node-build.mjs                        # MCP handshake + WebSocket pairing, dist/
 node verify-node-build.mjs bun src/lopecode-channel.ts   # same, against the source
 node verify-https-pairing.mjs                     # pairs a github.io notebook to a local server
+node verify-vanilla-instructions.mjs              # a Claude Code that has never seen this repo
 ```
+
+`verify-vanilla-instructions.mjs` is the one that guards this README and the server's
+`instructions` block. It installs the packed tarball into a temp dir, points a `claude -p` run at
+it with an empty cwd (no `CLAUDE.md`, no `.mcp.json`), `--strict-mcp-config` and empty settings,
+shadows `open`/`xdg-open` with a headless Playwright stub, and asks only *"Open a lopecode
+notebook"*. The verdict comes from the channel's own `/health`, so a plausible-looking URL that
+does not pair still fails. Set `ANTHROPIC_API_KEY` to isolate the config dir as well — without it
+auth lives in a keychain entry keyed to the real config dir, so that dir is reused and the run
+reports `config-dir-shared` rather than claiming to be fully vanilla.
 
 To point a Claude Code session at a working copy rather than the published plugin:
 

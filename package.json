@@ -11,6 +11,7 @@
     "build": "bun run build.ts",
     "test": "bun test ./tests/lopecode-channel.test.ts",
     "verify": "node verify-node-build.mjs && node verify-node-build.mjs bun src/lopecode-channel.ts",
+    "verify:vanilla": "node verify-vanilla-instructions.mjs",
     "prepublishOnly": "bun run build.ts"
   },
   "files": [
