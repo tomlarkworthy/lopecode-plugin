@@ -19175,7 +19175,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/lopecode-channel.ts
 import { spawn as spawnProcess } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
+import { createRequire } from "module";
 import { join, dirname, basename, resolve, sep as pathSep } from "path";
 import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync, readFileSync as fsReadFileSync } from "fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, stat as fsStat, rm as fsRm, open as fsOpen } from "fs/promises";
@@ -19271,14 +19272,33 @@ async function ensureQaSession(name, opts = {}) {
     qaLaunching.delete(name);
   }
 }
-async function loadChromium() {
+var PLAYWRIGHT_HINT = "Install playwright where this channel can resolve it \u2014 either `npm i playwright` in the same package as @lopecode/channel, or anywhere at all plus LOPECODE_PLAYWRIGHT=/path/to/playwright \u2014 then `npx playwright install chromium` and restart Claude Code. A global `npm i -g playwright` does NOT work: ESM cannot resolve global node_modules.";
+function resolvePlaywright() {
+  const req = createRequire(import.meta.url);
+  const explicit = process.env.LOPECODE_PLAYWRIGHT?.trim();
+  if (explicit) {
+    if (explicit.toLowerCase() === "none") return null;
+    try {
+      return pathToFileURL(req.resolve(explicit)).href;
+    } catch {
+      return null;
+    }
+  }
   try {
-    return (await import("playwright")).chromium;
+    req.resolve("playwright");
+    return "playwright";
   } catch {
+    return null;
+  }
+}
+var PLAYWRIGHT_SPEC = resolvePlaywright();
+async function loadChromium() {
+  if (!PLAYWRIGHT_SPEC) {
     throw new Error(
-      "the qa_* tools need playwright, which is not bundled. Install it once with `npm i -g playwright && npx playwright install chromium`, then retry. Pairing, define_cell and the other tools do not need it."
+      `the qa_* browser tools are not available in this session because playwright is not installed. Retrying will not help. ${PLAYWRIGHT_HINT} Pairing, define_cell and every other tool work without it.`
     );
   }
+  return (await import(PLAYWRIGHT_SPEC)).chromium;
 }
 async function launchQaSession(name, opts) {
   const chromium = await loadChromium();
@@ -19395,6 +19415,11 @@ open_url without a browser argument \u2014 it already handles the macOS bug wher
 strips hash fragments from file:// URLs, and naming a browser binary yourself bypasses that.
 
 If channels are not enabled, tell the user to restart with: claude --channels server:lopecode
+${PLAYWRIGHT_SPEC ? "" : `
+The qa_* browser tools (qa_open_notebook, qa_screenshot, qa_click, \u2026) are NOT available in this
+session \u2014 playwright is not installed, so they are not in your tool list. open_url is the way to
+open a notebook. If the user asks for browser automation or a screenshot, tell them: ${PLAYWRIGHT_HINT}
+`}
 
 ## Headless pairing (no foreground browser)
 
@@ -20173,7 +20198,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: t.description,
       inputSchema: t.inputSchema
     }))
-  ]
+  ].filter((t) => PLAYWRIGHT_SPEC !== null || !t.name?.startsWith("qa_"))
 }));
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const args = req.params.arguments ?? {};

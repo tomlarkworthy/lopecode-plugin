@@ -307,6 +307,66 @@ describe("lopecode-channel server", () => {
 });
 
 /**
+ * playwright is not a dependency, so most installs cannot run the qa_* tools. Advertising them
+ * anyway taught an agent to retry one three times in a row (seen in CI against MiMo), so they
+ * are hidden when playwright cannot be resolved.
+ */
+describe("qa_* tools are only advertised when playwright is available", () => {
+  /** Minimal MCP stdio client: initialize, then tools/list. */
+  async function listTools(env: Record<string, string>): Promise<{ names: string[]; instructions: string }> {
+    const proc = spawn(["bun", "run", CHANNEL_SCRIPT], {
+      env: { ...process.env as any, LOPECODE_PORT: "0", ...env },
+      stdin: "pipe", stdout: "pipe", stderr: "ignore",
+    });
+    const send = (o: unknown) => proc.stdin.write(JSON.stringify(o) + "\n");
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
+
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let instructions = "";
+    try {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value);
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.id === 1) {
+            instructions = msg.result?.instructions ?? "";
+            send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+          }
+          if (msg.id === 2) return { names: msg.result.tools.map((t: any) => t.name), instructions };
+        }
+      }
+      throw new Error("no tools/list response");
+    } finally {
+      reader.releaseLock();
+      proc.kill();
+    }
+  }
+
+  it("lists them when playwright resolves", async () => {
+    const { names } = await listTools({});
+    expect(names.filter((n) => n.startsWith("qa_")).length).toBeGreaterThan(0);
+  });
+
+  it("hides them, and says why, when it does not", async () => {
+    const { names, instructions } = await listTools({ LOPECODE_PLAYWRIGHT: "none" });
+    expect(names.filter((n) => n.startsWith("qa_"))).toEqual([]);
+    expect(names).toContain("open_url");            // the alternative must still be there
+    expect(instructions.replace(/\s+/g, " ")).toContain("are NOT available in this session");
+    // A global install is what an agent reaches for first, and ESM cannot resolve it —
+    // the advice has to say so rather than leaving it as the obvious next step.
+    expect(instructions.replace(/\s+/g, " ")).toContain("`npm i -g playwright` does NOT work");
+  });
+});
+
+/**
  * Inbound push is allowlist-gated in Claude Code and the server cannot see that decision —
  * initialize capabilities and CLAUDE_* env are identical with and without --channels. So the
  * channel watches for a symptom instead: a forwarded message that nothing answers.

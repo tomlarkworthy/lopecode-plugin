@@ -15,7 +15,8 @@ import {
 import { createServer } from "http";
 import { WebSocketServer, type WebSocket as ServerWebSocket } from "ws";
 import { spawn as spawnProcess } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
+import { createRequire } from "module";
 import { join, dirname, basename, resolve, sep as pathSep } from "path";
 import { mkdirSync, writeFileSync, unlinkSync, readdirSync, statSync, watchFile, unwatchFile, readFileSync as fsReadFileSync } from "fs";
 import { mkdir as fsMkdir, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, stat as fsStat, rm as fsRm, utimes as fsUtimes, open as fsOpen } from "fs/promises";
@@ -184,17 +185,43 @@ async function ensureQaSession(name: string, opts: QaLaunchOpts = {}): Promise<Q
 }
 
 // playwright is not a dependency — it is ~20MB and only the qa_* tools use it, so it would
-// otherwise be paid for on every `npx -y @lopecode/channel` cold start.
+// otherwise be paid for on every `npx -y @lopecode/channel` cold start. Which means most
+// installs cannot run the qa_* tools at all, and advertising fourteen tools that always fail
+// invites an agent to keep trying them. Resolve once at startup and hide them when absent.
+//
+// Resolution is deliberately not a plain `import("playwright")` at call time: a *global*
+// install (`npm i -g playwright`) is not importable from here — ESM ignores NODE_PATH, so
+// global node_modules is never on the resolution path. Verified 2026-08-17: a global install
+// gives ERR_MODULE_NOT_FOUND both with and without NODE_PATH set. Telling users to install
+// globally was advice that could not work.
+const PLAYWRIGHT_HINT =
+  "Install playwright where this channel can resolve it — either `npm i playwright` in the " +
+  "same package as @lopecode/channel, or anywhere at all plus LOPECODE_PLAYWRIGHT=/path/to/playwright " +
+  "— then `npx playwright install chromium` and restart Claude Code. A global `npm i -g playwright` " +
+  "does NOT work: ESM cannot resolve global node_modules.";
+
+/** Path/specifier to import playwright from, or null if it is not available in this session. */
+function resolvePlaywright(): string | null {
+  const req = createRequire(import.meta.url);
+  const explicit = process.env.LOPECODE_PLAYWRIGHT?.trim();
+  if (explicit) {
+    if (explicit.toLowerCase() === "none") return null;   // opt out (and lets tests cover the absent path)
+    try { return pathToFileURL(req.resolve(explicit)).href; } catch { return null; }
+  }
+  try { req.resolve("playwright"); return "playwright"; } catch { return null; }
+}
+
+const PLAYWRIGHT_SPEC = resolvePlaywright();
+
 async function loadChromium() {
-  try {
-    return (await import("playwright")).chromium;
-  } catch {
+  if (!PLAYWRIGHT_SPEC) {
     throw new Error(
-      "the qa_* tools need playwright, which is not bundled. Install it once with " +
-      "`npm i -g playwright && npx playwright install chromium`, then retry. " +
-      "Pairing, define_cell and the other tools do not need it.",
+      "the qa_* browser tools are not available in this session because playwright is not " +
+      `installed. Retrying will not help. ${PLAYWRIGHT_HINT} ` +
+      "Pairing, define_cell and every other tool work without it.",
     );
   }
+  return (await import(PLAYWRIGHT_SPEC)).chromium;
 }
 
 async function launchQaSession(name: string, opts: QaLaunchOpts): Promise<QaSession> {
@@ -324,6 +351,11 @@ open_url without a browser argument — it already handles the macOS bug where t
 strips hash fragments from file:// URLs, and naming a browser binary yourself bypasses that.
 
 If channels are not enabled, tell the user to restart with: claude --channels server:lopecode
+${PLAYWRIGHT_SPEC ? "" : `
+The qa_* browser tools (qa_open_notebook, qa_screenshot, qa_click, …) are NOT available in this
+session — playwright is not installed, so they are not in your tool list. open_url is the way to
+open a notebook. If the user asks for browser automation or a screenshot, tell them: ${PLAYWRIGHT_HINT}
+`}
 
 ## Headless pairing (no foreground browser)
 
@@ -1117,7 +1149,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: t.description,
       inputSchema: t.inputSchema,
     })),
-  ],
+  ].filter((t) => PLAYWRIGHT_SPEC !== null || !t.name?.startsWith("qa_")),
 }));
 
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
