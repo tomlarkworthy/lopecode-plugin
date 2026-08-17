@@ -329,9 +329,30 @@ If you see the `@tomlarkworthy/claude-code-pairing` panel in a notebook but Clau
    chat box will accept what you type and send it nowhere ([why](#quick-start))
 3. Ask Claude for a pairing token and paste it into the panel (or let Claude open the URL with `&cc=TOKEN`)
 
+## Browser automation (`qa_*`) is optional
+
+playwright is a devDependency, not a runtime one, so an `npx -y @lopecode/channel` install does
+not have it and the nine `qa_*` tools are left out of `tools/list` entirely:
+
+```
+tools/list, playwright resolvable    30 tools, 9 qa_*
+tools/list, not resolvable           21 tools, 0 qa_*
+```
+
+They are hidden rather than left to fail because an advertised tool that always throws gets
+retried — a vanilla agent called `qa_open_notebook` three times in one run before this change.
+`open_url` opens a notebook and needs no playwright, so nothing about pairing depends on this.
+
+To get them, install playwright *where the channel can resolve it* — the same package as
+`@lopecode/channel`, or anywhere plus `LOPECODE_PLAYWRIGHT` — then `npx playwright install
+chromium` and restart Claude Code. `npm i -g playwright` does not work: ESM resolution consults
+neither `NODE_PATH` nor the global root, and both fail with `ERR_MODULE_NOT_FOUND`.
+
 ## Environment Variables
 
 - `LOPECODE_PORT` — WebSocket server port (default: random free port)
+- `LOPECODE_PLAYWRIGHT` — path or specifier for playwright, when it is not resolvable from the
+  channel's own package. `none` forces the unavailable path, which is how the tests exercise it.
 
 ## License
 
