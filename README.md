@@ -55,14 +55,25 @@ turns the gate off (`LOPE_E2E_DISABLE_LNA=1`) and keeps a gated run as an inform
 /plugin install lopecode-channel@lopecode-plugins
 ```
 
-This repository is both the marketplace and the plugin. `dist/` is committed so the install
-is a clone with no build step. The plugin declares its channel in `plugin.json`:
+Then start Claude with the channel selected by its plugin tag:
+
+```bash
+claude --dangerously-load-development-channels plugin:lopecode-channel@lopecode-plugins
+```
+
+**Verified 2026-08-18** on Claude Code 2.1.233, marketplace install as above. This route touches
+npm not at all — the repository is both the marketplace and the plugin, and `dist/` is committed,
+so the install is a clone with no build step. The plugin declares its channel in `plugin.json`:
 
 ```json
 "channels": [{ "server": "lopecode", "displayName": "Lopecode" }]
 ```
 
-Installing as a plugin does not by itself remove the flag — see below.
+A fresh clone has no `node_modules`, so playwright is not resolvable and the nine `qa_*` tools are
+absent — 21 tools rather than 30. See [Browser automation is optional](#browser-automation-qa_-is-optional).
+
+Installing as a plugin does not by itself remove the flag: the development flag is still what
+authorises the channel. It does change which gate you can aim at — see below.
 
 ### Inbound push without the flag
 
@@ -74,9 +85,11 @@ plugin:lopecode-channel@lopecode-plugins     a plugin-provided channel
 ```
 
 Only the `plugin:` form can reach the allowlist at all; a plugin-installed server selected as
-`server:…` still takes the server path and still needs the development flag. The allowlist
-itself is read from **managed settings only** — not `~/.claude/settings.json` — so
-self-allowlisting means writing a root-owned file:
+`server:…` still takes the server path. Either tag works under
+`--dangerously-load-development-channels`, which marks the entry `dev` and skips the allowlist
+check for both kinds — that is the flag's whole effect on this gate. The allowlist itself is read
+from **managed settings only** — not `~/.claude/settings.json` — so self-allowlisting means
+writing a root-owned file:
 
 ```jsonc
 // macOS: /Library/Application Support/ClaudeCode/managed-settings.json
@@ -99,8 +112,24 @@ Then:
 claude --channels plugin:lopecode-channel@lopecode-plugins
 ```
 
-This path is **untested** — it is read off the gate's behaviour in Claude Code 2.1.233, not
-run end to end. The development flag above is the path that has actually been used.
+This path is **untested** — it is read off the gate's behaviour in Claude Code 2.1.233, not run
+end to end. What has been run is the same selector under the development flag (verified
+2026-08-18); only the managed-settings half is unexercised.
+
+### One gate condition no flag overrides
+
+The same check refuses the channel outright when the MCP connection negotiates protocol revision
+**2026-07-28**, which Claude Code calls the `modern` era (legacy is `2025-11-25`):
+
+```
+skip: connection negotiated a modern protocol revision with no unsolicited notification path
+```
+
+It is evaluated before the allowlist, so no flag helps. `@modelcontextprotocol/sdk@^1.12.1`
+reports `LATEST_PROTOCOL_VERSION 2025-11-25` and does not offer 2026-07-28 at all, so this server
+cannot negotiate into it. Re-check that before bumping the SDK: inbound push would go silently
+dead, the WebSocket-level checks would still pass, and the 40s liveness warning would blame the
+flag instead.
 
 ### Development
 
