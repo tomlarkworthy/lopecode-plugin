@@ -230,6 +230,61 @@ describe("lopecode-channel server", () => {
       expect(res.status).toBe(200);
       ws.close();
     });
+
+    it("renders an array delta as delta/from/length meta on the notification", async () => {
+      const ws = await connectWs(port);
+      await sendAndReceive(ws, {
+        type: "pair",
+        token,
+        url: "http://test/notebook-delta",
+        title: "Delta Test",
+      });
+
+      // MCP notifications go to the server's stdout as JSON-RPC lines
+      const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      const found = new Promise<any>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no delta notification in stdout: ${buf.slice(-500)}`)), 5000);
+        function read() {
+          reader.read().then(({ done, value }) => {
+            if (done) return reject(new Error("stdout closed"));
+            buf += decoder.decode(value);
+            for (const line of buf.split("\n")) {
+              if (!line.includes('"deltaVar"')) continue;
+              try {
+                const rpc = JSON.parse(line);
+                clearTimeout(timer);
+                return resolve(rpc.params);
+              } catch {}
+            }
+            read();
+          });
+        }
+        read();
+      });
+
+      ws.send(JSON.stringify({
+        type: "variable-update",
+        name: "deltaVar",
+        module: "main",
+        value: "[3, 4]",
+        delta: { from: 2, length: 4 },
+      }));
+
+      const params = await found;
+      reader.releaseLock();
+      expect(params.content).toBe("[3, 4]");
+      expect(params.meta).toMatchObject({
+        type: "variable_update",
+        name: "deltaVar",
+        module: "main",
+        delta: "append",
+        from: "2",
+        length: "4",
+      });
+      ws.close();
+    });
   });
 
   describe("cell-change forwarding", () => {

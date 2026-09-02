@@ -458,7 +458,7 @@ When a notebook is loaded with \`?filesync=...\`, every \`<sync-target>/<author>
 
 ## Channel signal vs. noise
 
-Channel \`variable_update\` and \`history\` events arrive as system reminders. They're ambient signal — most are routine (hash, currentModules, rerun history) and don't need a text response. Reply only when the event represents new information for an in-flight diagnosis (e.g. you were watching a variable and it changed) or when the user asks something. Don't acknowledge passive events with "Standing by." or similar — that just clutters the transcript.
+Channel \`variable_update\` and \`history\` events arrive as system reminders. They're ambient signal — most are routine (hash, currentModules, cell_change) and don't need a text response. Reply only when the event represents new information for an in-flight diagnosis (e.g. you were watching a variable and it changed) or when the user asks something. Don't acknowledge passive events with "Standing by." or similar — that just clutters the transcript.
 
 ## High-level cell patterns (define_cell)
 
@@ -594,6 +594,9 @@ Lifecycle:
 
 Variable updates (when watching):
   <channel source="lopecode" type="variable_update" notebook="..." name="varName" module="@author/mod">value</channel>
+  <channel source="lopecode" type="variable_update" notebook="..." name="log" module="main" delta="append" from="57" length="59">the two items appended since the last update</channel>
+
+A watch sends nothing when the serialized value is unchanged. An array that only grew is sent as its appended tail with delta="append"; the first update after (re)connect is always the whole value. Cell edits are streamed as cell_change, so watching \`history\` is redundant.
 
 ## Compiled module format (low-level)
 
@@ -1883,6 +1886,8 @@ function handleWsMessage(ws: ServerWebSocket, raw: string | Buffer) {
             name: msg.name || "",
             module: msg.module || "",
             ...(msg.error ? { error: true } : {}),
+            // append-only array: content is items [from, length), not the whole value
+            ...(msg.delta ? { delta: "append", from: String(msg.delta.from), length: String(msg.delta.length) } : {}),
           },
         },
       });
