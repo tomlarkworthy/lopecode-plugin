@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "bun run build.ts",
-    "test": "bun test ./tests/lopecode-channel.test.ts",
+    "test": "bun test ./tests/lopecode-channel.test.ts ./tests/claude-runner.test.ts",
     "verify": "node verify-node-build.mjs && node verify-node-build.mjs bun src/lopecode-channel.ts",
     "verify:vanilla": "node verify-vanilla-instructions.mjs",
     "prepublishOnly": "bun run build.ts"
@@ -42,6 +42,7 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.25.12",

@@ -13,6 +13,7 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "http";
+import { createClaudeRunner } from "./claude-runner.ts";
 import { WebSocketServer, type WebSocket as ServerWebSocket } from "ws";
 import { spawn as spawnProcess } from "child_process";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -44,6 +45,12 @@ let PORT = REQUESTED_PORT;
 // (per-notebook subdirs are keyed by notebook ID, so collisions only happen when two sessions
 // target the same notebook — coordinate manually in that case).
 const DEFAULT_FAKEFS_ROOT = process.env.LOPECODE_FAKEFS_ROOT ?? "/tmp/lopecode-fakefs";
+
+// Opt-in: serve an OpenAI-compatible LLM endpoint on this port from the local Claude Code login, so an
+// in-notebook agent (robocoop-5) can run on it. The pairing token is the bearer. See claude-runner.ts.
+const LLM_RUNNER = process.env.LOPECODE_LLM_RUNNER === "1"
+  ? createClaudeRunner({ token: () => PAIRING_TOKEN, verbose: process.env.LOPECODE_LLM_RUNNER_VERBOSE === "1" })
+  : null;
 
 // --- Pairing token (generated after port binding) ---
 function generateToken(): string {
@@ -2200,8 +2207,16 @@ const server = createServer((req, res) => {
   const send = (status: number, body: string, type = "text/plain") =>
     res.writeHead(status, { "content-type": type }).end(body);
 
+  if (url.pathname.startsWith("/v1")) {
+    if (LLM_RUNNER) { LLM_RUNNER.handle(req, res); return; }
+    res.writeHead(req.method === "OPTIONS" ? 204 : 403, { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "content-type": "application/json" })
+      .end(req.method === "OPTIONS" ? "" : JSON.stringify({ error: { message: "LLM runner is off: start Claude Code with LOPECODE_LLM_RUNNER=1" } }));
+    return;
+  }
+
   if (url.pathname === "/health") {
     return send(200, JSON.stringify({
+      llm: LLM_RUNNER ? LLM_RUNNER.status().stats : null,
       paired: pairedConnections.size,
       pending: pendingConnections.size,
       dynamicTools: Object.fromEntries(

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### An LLM endpoint on the channel port, opt-in (`LOPECODE_LLM_RUNNER=1`)
+
+`src/claude-runner.ts` serves `/v1/chat/completions` from the local Claude Code login through
+`@anthropic-ai/claude-agent-sdk` 0.3.287, so robocoop-5 in a paired notebook can run on a Claude
+subscription with its own loop and tools. The pairing token is the bearer. Off by default: `/v1/*`
+answers 403 and `/health` reports `"llm": null`.
+
+Tests: `tests/claude-runner.test.ts`, 5 gating cases with no model and 1 live case behind
+`LOPECODE_LLM_LIVE=1`. On 2026-10-03: 6 pass with the live case, the existing 19 pass,
+`verify-node-build.mjs` passes, and a chat through `node dist/lopecode-channel.mjs` returned.
+
+The SDK is a devDependency bundled into `dist/` (756 KB → 2.3 MB) and imported on the first chat
+request; the package still has no runtime dependencies. It was installed with `--omit=optional`, so
+the 224 MB platform binary is absent and the runner uses the `claude` on `PATH`.
+
+This puts state in the channel server that is not connection management, against the "dumb pipe"
+rule in `development-of-pairing-channel-and-claude-plugin.md`. It is kept in its own file and the
+channel only routes `/v1/*` to it.
+
 ## 0.5.0 — 2026-08-17
 
 The release that made the published install actually work for someone who has never seen this

@@ -377,9 +377,39 @@ To get them, install playwright *where the channel can resolve it* — the same 
 chromium` and restart Claude Code. `npm i -g playwright` does not work: ESM resolution consults
 neither `NODE_PATH` nor the global root, and both fail with `ERR_MODULE_NOT_FOUND`.
 
+## Running a notebook's own agent on your Claude login (`LOPECODE_LLM_RUNNER=1`)
+
+Off by default. With `LOPECODE_LLM_RUNNER=1` in the environment Claude Code starts in, the channel port
+also serves an OpenAI-compatible endpoint backed by the local Claude Code login, through the Claude
+Agent SDK:
+
+```
+GET  http://127.0.0.1:<port>/v1/models              no token
+POST http://127.0.0.1:<port>/v1/chat/completions    Authorization: Bearer <pairing token>
+```
+
+A notebook agent that owns its own loop and tools (robocoop-5) uses it as its model. The caller's
+`tools` are returned as `tool_calls` and executed by the caller; the agent process runs no built-in
+tools and loads no settings, CLAUDE.md or MCP servers. robocoop-5 finds the endpoint from the `cc=`
+pairing token at boot when its endpoint setting is empty.
+
+This is for your own use of your own subscription. Each conversation is a separate `claude` process
+under your login and counts against the same limits as the session that hosts the channel. The
+endpoint binds 127.0.0.1 and a chat needs the pairing token.
+
+The SDK is bundled into `dist/` (756 KB → 2.3 MB) and loaded on the first chat request. It runs the
+`claude` on `PATH`; set `LOPECODE_CLAUDE_PATH` to use another. `bun src/claude-runner-cli.ts` serves
+the same endpoint without a Claude Code session.
+
+Design, the SDK behaviours it rests on, and what is not honoured (`temperature`, `seed`,
+`max_tokens`, `reasoning`): `src/claude-runner.ts` and, in the lopecode-dev repo,
+`tools/robocoop-5/README.md` § Running on a Claude subscription.
+
 ## Environment Variables
 
 - `LOPECODE_PORT` — WebSocket server port (default: random free port)
+- `LOPECODE_LLM_RUNNER` — `1` serves the LLM endpoint above (default: off, `/v1/*` answers 403)
+- `LOPECODE_CLAUDE_PATH` — the `claude` binary the LLM endpoint runs (default: `claude` on `PATH`)
 - `LOPECODE_PLAYWRIGHT` — path or specifier for playwright, when it is not resolvable from the
   channel's own package. `none` forces the unavailable path, which is how the tests exercise it.
 
