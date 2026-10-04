@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-04
 
 ### An LLM endpoint on the channel port, opt-in (`LOPECODE_LLM_RUNNER=1`)
 
@@ -12,6 +12,9 @@ answers 403 and `/health` reports `"llm": null`.
 Tests: `tests/claude-runner.test.ts`, 5 gating cases with no model and 1 live case behind
 `LOPECODE_LLM_LIVE=1`. On 2026-10-03: 6 pass with the live case, the existing 19 pass,
 `verify-node-build.mjs` passes, and a chat through `node dist/lopecode-channel.mjs` returned.
+
+Release check, 2026-10-04: the packed 0.6.0 tarball installed into an empty directory (1 package,
+2.5 MB), started with `node`, listed 4 models and answered one chat with `LOPECODE_LLM_RUNNER=1`.
 
 The SDK is a devDependency bundled into `dist/` (756 KB → 2.3 MB) and imported on the first chat
 request; the package still has no runtime dependencies. It was installed with `--omit=optional`, so
